@@ -1,5 +1,9 @@
 #  AI-Driven Malware — TP1 Intelligence Artificielle & Cybersécurité
 
+Dépôt GitHub du projet :  
+👉 https://github.com/Ecknard/Projet_keylogger_ai.git
+
+
 > **SUP DE VINCI** — TP1 IA & Cybersécurité  
 
 
@@ -35,7 +39,6 @@ ai_keylogger/
 
 ```bash
 # 1. Cloner le repo
-```markdown
 git clone https://github.com/Ecknard/Projet_keylogger_ai.git
 cd ai_keylogger
 
