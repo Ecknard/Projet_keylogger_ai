@@ -1,0 +1,33 @@
+# Environnements virtuels
+env/
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Données sensibles — NE JAMAIS COMMITTER
+data/log.txt
+data/log.enc
+data/secret.key
+data/*.joblib
+data/*.json
+data/report.html
+
+# Garder le dossier data/
+!data/.gitkeep
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Distribution / packaging
+*.egg-info/
+dist/
+build/
