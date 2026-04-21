@@ -1,23 +1,10 @@
-# 🔍 AI-Driven Malware — TP1 Intelligence Artificielle & Cybersécurité
+#  AI-Driven Malware — TP1 Intelligence Artificielle & Cybersécurité
 
 > **SUP DE VINCI** — TP1 IA & Cybersécurité  
-> Correction complète et commentée
 
----
 
-## ⚠️ Avertissement éthique et légal
 
-Ce projet est **exclusivement pédagogique**. L'utilisation d'un keylogger sans le consentement explicite et écrit de la personne surveillée est :
-
-- **Illégale** en France (Loi Godfrain, article 323-1 du Code pénal)
-- **Illégale** dans l'UE (RGPD, directive NIS2)
-- Passible de **2 ans d'emprisonnement et 60 000 € d'amende**
-
-**Ce code ne doit être exécuté que sur votre propre machine, dans un environnement de test isolé.**
-
----
-
-## 📁 Structure du projet
+##  Structure du projet
 
 ```
 ai_keylogger/
@@ -44,14 +31,14 @@ ai_keylogger/
 
 ---
 
-## 🚀 Installation
+##  Installation
 
 ```bash
 # 1. Cloner le repo
-git clone <url_du_repo>
+git clone https://github.com/Ecknard/AI_K.git
 cd ai_keylogger
 
-# 2. Créer l'environnement virtuel
+# 2. Création de l'environnement virtuel
 python -m venv env
 
 # 3. Activer l'environnement
@@ -60,7 +47,7 @@ python -m venv env
 # Linux / macOS :
 source env/bin/activate
 
-# 4. Installer les dépendances
+# 4. Installation les dépendances
 pip install -r requirements.txt
 
 # 5. Vérifier l'installation
@@ -71,7 +58,7 @@ python -c "import plotly; print('plotly OK')"
 
 ---
 
-## 🏃 Utilisation
+##  Utilisation
 
 ### Partie I — Lancer le keylogger de base
 ```bash
@@ -110,7 +97,7 @@ python tests/test_all.py
 
 ---
 
-## 📚 Réponses aux questions du TP
+##  Réponses aux questions du TP
 
 ### Tâche 1 — Analyse conceptuelle
 
@@ -223,7 +210,7 @@ def report(interval=10):
 
 ---
 
-## 🔒 Architecture de sécurité
+##  Architecture de sécurité
 
 ```
 Frappes → processkeys() → log buffer
@@ -239,10 +226,7 @@ Frappes → processkeys() → log buffer
 
 ---
 
-## 🤝 Contribution
+##  Contribution
 
-Ce projet est une correction pédagogique. Pour toute amélioration :
-1. Fork le repo
-2. Créer une branche feature (`git checkout -b feature/extension-d`)
-3. Commit (`git commit -m 'Add: Extension D dashboard'`)
-4. Push et ouvrir une Pull Request
+1. Samuel MENSAH
+2. Josiane EGLA
