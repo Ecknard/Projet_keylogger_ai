@@ -2,7 +2,8 @@
 sensitive_detector.py — Partie III : Classification de données sensibles
 TP1 — Intelligence Artificielle & Cybersécurité
 
-AMÉLIORATIONS v2 :
+ Details :
+ 
     - Nouveaux patterns regex : URL avec token, JWT, clé API (Bearer/AWS/GCP/GitHub),
       IPv6, hash MD5/SHA, coordonnées GPS, SIRET/SIREN, numéro de passeport FR
     - Validation Luhn pour les cartes bancaires (zéro faux positifs CB)
@@ -622,7 +623,7 @@ if __name__ == "__main__":
     for text in test_texts:
         result = analyze_text(text, model, scaler)
         print(f"\n📝 Original  : {text[:70]}")
-        print(f"🔒 Masqué    : {result['masked_text'][:70]}")
-        print(f"✂️  Redacté   : {result['redacted_text'][:70]}")
+        print(f" Masqué    : {result['masked_text'][:70]}")
+        print(f" Redacté   : {result['redacted_text'][:70]}")
         types_risks = [(d['type'], d.get('risk_level','?')) for d in result['detections']]
-        print(f"🎯 Risque    : {result['overall_risk']} → {types_risks}")
+        print(f" Risque    : {result['overall_risk']} → {types_risks}")
