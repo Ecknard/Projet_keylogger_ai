@@ -2,7 +2,7 @@
 keylogger.py — Partie I : Capture et enregistrement des frappes clavier
 TP1 — Intelligence Artificielle & Cybersécurité
 
-AMÉLIORATIONS v2 (pipeline temps réel) :
+Pipeline temps réel :
     - À chaque flush (report()), le texte est analysé en temps réel :
         → sentiment_analyzer  → data/sentiments.json
         → sensitive_detector  → data/detections.json
@@ -10,8 +10,6 @@ AMÉLIORATIONS v2 (pipeline temps réel) :
     - Flush immédiat si données sensibles détectées (mode alerte)
     - Possibilité de démarrer le keylogger avec le ML chargé (train ou load)
 
-⚠️  USAGE ÉTHIQUE UNIQUEMENT : ce code est fourni dans un cadre pédagogique.
-    Toute utilisation sans consentement explicite est illégale (RGPD, Loi Godfrain).
 """
 
 import json
