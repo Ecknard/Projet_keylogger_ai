@@ -10,8 +10,8 @@ plotly>=5.18.0
 
 # ── Analyse de sentiment ───────────────────────────────────────────────────
 vaderSentiment>=3.3.2
-langdetect>=1.0.9          # Détection automatique de la langue (v2)
-textblob>=0.17.1           # Fallback analyse française (v2)
+langdetect>=1.0.9          # Détection automatique de la langue 
+textblob>=0.17.1           # Fallback analyse française 
 
 # ── Détection de données sensibles ────────────────────────────────────────
 scikit-learn>=1.4.0
