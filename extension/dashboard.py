@@ -1,25 +1,20 @@
 """
-extension/dashboard.py — Extension D v2.0 : Dashboard de supervision temps réel
+extension/dashboard.py — Extension D : Dashboard de supervision temps réel
 TP1 — Intelligence Artificielle & Cybersécurité
 
-CORRECTIONS v2.0 :
-    ✅ StreamlitDuplicateElementId — key= unique sur chaque st.plotly_chart
-    ✅ Auto-refresh non-bloquant via compteur + st.rerun()
-    ✅ Cache TTL isolé par session
-    ✅ Gestion robuste des données manquantes / vides
-    ✅ Nouveau design : SOC terminal / matrix aesthetic
-    ✅ 6 vues dont Threat Intelligence (nouveau)
-    ✅ 5 KPI cards avec threat score calculé dynamiquement
-    ✅ Highlight des données sensibles dans le log terminal
-    ✅ Countdown refresh visible en bas à droite
+Interface web locale (Streamlit) pour superviser en temps réel :
+    - Logs de frappes horodatés
+    - Évolution des sentiments
+    - Anomalies comportementales
+    - Données sensibles détectées
+    - Métriques de session en direct
 
 Lancement : streamlit run extension/dashboard.py
-URL         : http://localhost:8501
+URL locale  : http://localhost:8501
 """
 
-import collections
 import json
-import re
+import os
 import sys
 import time
 from datetime import datetime, timedelta
@@ -28,892 +23,902 @@ from pathlib import Path
 import plotly.graph_objects as go
 import streamlit as st
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Chemins
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Résolution des chemins (fonctionne quelle que soit la CWD)
+# ---------------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 sys.path.insert(0, str(ROOT))
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Page config — PREMIER appel st.*
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Configuration Streamlit — DOIT être le premier appel st.*
+# ---------------------------------------------------------------------------
 st.set_page_config(
-    page_title="AI Keylogger · SOC Dashboard",
-    page_icon="🛡️",
+    page_title="AI Keylogger — Dashboard",
+    page_icon="🔍",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CSS — Terminal / SOC aesthetic
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# CSS — Dark theme industriel / cybersec
+# ---------------------------------------------------------------------------
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&family=Inter:wght@300;400;500;600&display=swap');
+    /* ── Fonts ── */
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;700&family=Syne:wght@400;600;800&display=swap');
 
-*, *::before, *::after { box-sizing: border-box; }
+    /* ── Base ── */
+    html, body, [class*="css"] {
+        font-family: 'Syne', sans-serif;
+        background-color: #0a0e17;
+        color: #c9d1d9;
+    }
+    .main { background-color: #0a0e17; }
+    .block-container { padding: 1.5rem 2rem; max-width: 1400px; }
 
-html, body, [class*="css"], .stApp {
-    background-color: #060a0f !important;
-    color: #a0b4c0;
-    font-family: 'Inter', sans-serif;
-}
-.main .block-container { padding: 1.2rem 1.8rem 2rem; max-width: 1500px; }
+    /* ── Header ── */
+    .dash-header {
+        background: linear-gradient(135deg, #0d1b2a 0%, #1a2744 50%, #0d1b2a 100%);
+        border: 1px solid #1f3a5f;
+        border-radius: 12px;
+        padding: 28px 36px;
+        margin-bottom: 24px;
+        position: relative;
+        overflow: hidden;
+    }
+    .dash-header::before {
+        content: '';
+        position: absolute; top: 0; left: 0; right: 0; height: 3px;
+        background: linear-gradient(90deg, #00d4ff, #0066ff, #7b2fff, #00d4ff);
+        background-size: 200% 100%;
+        animation: scanline 3s linear infinite;
+    }
+    @keyframes scanline { 0%{background-position:0 0} 100%{background-position:200% 0} }
+    .dash-header h1 { font-family:'Syne',sans-serif; font-size:1.8em; font-weight:800;
+                      color:#e6edf3; letter-spacing:0.02em; margin:0 0 4px 0; }
+    .dash-header p  { color:#8b949e; font-size:0.88em; margin:0; font-family:'JetBrains Mono',monospace; }
 
-/* Grid background */
-.stApp::before {
-    content: '';
-    position: fixed; inset: 0; z-index: 0; pointer-events: none;
-    background-image:
-        linear-gradient(rgba(0,255,136,.025) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(0,255,136,.025) 1px, transparent 1px);
-    background-size: 44px 44px;
-}
+    /* ── KPI Cards ── */
+    .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
+    .kpi-card {
+        background: #0d1117;
+        border: 1px solid #21262d;
+        border-radius: 10px;
+        padding: 20px 24px;
+        position: relative;
+        overflow: hidden;
+        transition: border-color .2s;
+    }
+    .kpi-card:hover { border-color: #388bfd; }
+    .kpi-card::after {
+        content: '';
+        position: absolute; bottom: 0; left: 0; right: 0; height: 3px;
+        border-radius: 0 0 10px 10px;
+    }
+    .kpi-card.blue::after   { background: #388bfd; }
+    .kpi-card.green::after  { background: #3fb950; }
+    .kpi-card.red::after    { background: #f85149; }
+    .kpi-card.yellow::after { background: #d29922; }
+    .kpi-card .kpi-value  { font-size: 2.2em; font-weight: 800; font-family:'JetBrains Mono',monospace;
+                            color: #e6edf3; line-height: 1; }
+    .kpi-card .kpi-label  { font-size: 0.78em; color: #8b949e; margin-top: 6px;
+                            text-transform: uppercase; letter-spacing: 0.08em; }
+    .kpi-card .kpi-delta  { font-size: 0.78em; margin-top: 8px; font-family:'JetBrains Mono',monospace; }
+    .kpi-card .kpi-icon   { position: absolute; right: 20px; top: 50%; transform: translateY(-50%);
+                            font-size: 1.8em; opacity: 0.15; }
 
-/* ── HEADER ── */
-.soc-header {
-    background: linear-gradient(135deg, #060f1a 0%, #0a1e32 60%, #060f1a 100%);
-    border: 1px solid #0c3050;
-    border-top: 2px solid #00ff88;
-    border-radius: 10px;
-    padding: 22px 32px;
-    margin-bottom: 18px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    position: relative;
-    overflow: hidden;
-}
-.soc-header::after {
-    content: ''; position: absolute; right:-50px; top:-50px;
-    width:180px; height:180px; border-radius:50%;
-    background: radial-gradient(circle, rgba(0,255,136,.05) 0%, transparent 70%);
-}
-.soc-header h1 {
-    font-family: 'Orbitron', monospace; font-size: 1.35em; font-weight: 900;
-    color: #ddeef4; margin: 0 0 5px 0; letter-spacing: .05em;
-}
-.soc-header p {
-    font-family: 'Share Tech Mono', monospace; font-size: .72em; color: #3a6040; margin: 0;
-}
-.status-label { font-family:'Share Tech Mono',monospace; font-size:.65em; color:#2a4a30; letter-spacing:.12em; }
-.status-val   { font-family:'Orbitron',monospace; font-size:1.05em; font-weight:900; letter-spacing:.15em; }
-.s-nominal  { color:#00ff88; text-shadow: 0 0 10px rgba(0,255,136,.4); }
-.s-elevated { color:#ffaa00; text-shadow: 0 0 10px rgba(255,170,0,.4); }
-.s-critical { color:#ff3366; text-shadow: 0 0 10px rgba(255,51,102,.4);
-              animation: flicker .7s ease-in-out infinite alternate; }
-@keyframes flicker { from{opacity:1} to{opacity:.65} }
+    /* ── Section titles ── */
+    .section-title {
+        font-family: 'Syne', sans-serif; font-weight: 700; font-size: 0.95em;
+        color: #8b949e; text-transform: uppercase; letter-spacing: 0.12em;
+        border-left: 3px solid #388bfd; padding-left: 10px;
+        margin-bottom: 14px;
+    }
 
-/* ── SCAN BAR ── */
-.scan-bar {
-    background: #080e16; border: 1px solid #0c2a3e; border-radius: 6px;
-    padding: 8px 16px; margin-bottom: 16px;
-    display: flex; justify-content: space-between; align-items: center;
-    font-family: 'Share Tech Mono', monospace; font-size: .7em; color: #2a4a36;
-}
-.live-dot::before { content: '◉ '; color: #00ff88;
-    animation: blink 1.4s ease-in-out infinite; }
-@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.2} }
+    /* ── Log viewer ── */
+    .log-container {
+        background: #010409; border: 1px solid #21262d; border-radius: 8px;
+        padding: 16px; height: 280px; overflow-y: auto;
+        font-family: 'JetBrains Mono', monospace; font-size: 0.8em; line-height: 1.7;
+    }
+    .log-line { color: #8b949e; }
+    .log-line .ts  { color: #388bfd; }
+    .log-line .txt { color: #e6edf3; }
 
-/* ── KPI GRID ── */
-.kpi-row { display:grid; grid-template-columns:repeat(5,1fr); gap:12px; margin-bottom:18px; }
-.kpi-card {
-    background: #070e17; border: 1px solid #0c2230; border-radius: 8px;
-    padding: 16px 18px; position: relative; overflow: hidden;
-    transition: all .2s ease;
-}
-.kpi-card:hover { border-color: #00ff88; box-shadow: 0 0 18px rgba(0,255,136,.07); transform: translateY(-1px); }
-.kpi-card .top-bar { position:absolute; top:0; left:0; right:0; height:2px; }
-.kpi-card .ico     { position:absolute; right:13px; top:13px; font-size:1.3em; opacity:.1; }
-.kpi-card .val     {
-    font-family:'Orbitron',monospace; font-size:1.85em; font-weight:900; line-height:1; margin-bottom:5px;
-}
-.kpi-card .lbl     {
-    font-family:'Share Tech Mono',monospace; font-size:.65em; color:#2a4a52;
-    text-transform:uppercase; letter-spacing:.1em; margin-bottom:6px;
-}
-.kpi-card .sub     { font-family:'Share Tech Mono',monospace; font-size:.68em; color:#1e3a42; }
-.kpi-spark { height:24px; margin-top:8px; border-radius:3px;
-    background: repeating-linear-gradient(90deg,transparent 0,transparent 4px,rgba(0,255,136,.1) 4px,rgba(0,255,136,.1) 5px);
-    animation: spark 4s linear infinite; }
-@keyframes spark { from{background-position-x:0} to{background-position-x:50px} }
+    /* ── Alert badges ── */
+    .alert-badge {
+        display: inline-block; padding: 3px 10px; border-radius: 20px;
+        font-size: 0.75em; font-weight: 600; font-family:'JetBrains Mono',monospace;
+    }
+    .badge-critical { background: rgba(248,81,73,.15); color: #f85149; border: 1px solid #f85149; }
+    .badge-warning  { background: rgba(210,153,34,.15); color: #d29922; border: 1px solid #d29922; }
+    .badge-ok       { background: rgba(63,185,80,.15);  color: #3fb950; border: 1px solid #3fb950; }
+    .badge-info     { background: rgba(56,139,253,.15); color: #388bfd; border: 1px solid #388bfd; }
 
-.c-green  { color:#00ff88; } .b-green  { background:linear-gradient(90deg,#00ff88,#00bb66); }
-.c-blue   { color:#00aaff; } .b-blue   { background:linear-gradient(90deg,#00aaff,#0077cc); }
-.c-orange { color:#ffaa00; } .b-orange { background:linear-gradient(90deg,#ffaa00,#cc7700); }
-.c-red    { color:#ff3366; } .b-red    { background:linear-gradient(90deg,#ff3366,#cc1144); }
-.c-purple { color:#bb00ff; } .b-purple { background:linear-gradient(90deg,#bb00ff,#8800cc); }
+    /* ── Sensitive detections ── */
+    .detection-row {
+        background: #0d1117; border: 1px solid #21262d; border-radius: 8px;
+        padding: 12px 16px; margin-bottom: 8px;
+        display: flex; justify-content: space-between; align-items: center;
+    }
+    .detection-row .dtype { font-family:'JetBrains Mono',monospace; font-size:0.82em; color:#d29922; }
+    .detection-row .dtime { font-size:0.75em; color:#484f58; }
 
-/* ── SECTION HEADERS ── */
-.sec-hdr {
-    font-family:'Orbitron',monospace; font-size:.68em; font-weight:700;
-    color:#1e5040; letter-spacing:.18em; text-transform:uppercase;
-    border-left:2px solid #00ff88; padding-left:10px; margin-bottom:12px;
-}
+    /* ── Status bar ── */
+    .status-bar {
+        background: #010409; border: 1px solid #21262d; border-radius: 8px;
+        padding: 10px 16px; margin-bottom: 20px;
+        display: flex; justify-content: space-between; align-items: center;
+        font-family: 'JetBrains Mono', monospace; font-size: 0.78em;
+    }
+    .status-live { color: #3fb950; }
+    .status-live::before { content: '● '; animation: blink 1.2s ease-in-out infinite; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.2} }
 
-/* ── PANEL ── */
-.panel { background:#070e17; border:1px solid #0c2230; border-radius:8px; padding:14px; margin-bottom:12px; }
+    /* ── Sidebar ── */
+    [data-testid="stSidebar"] { background: #0d1117; border-right: 1px solid #21262d; }
+    [data-testid="stSidebar"] .stMarkdown { color: #8b949e; }
 
-/* ── LOG TERMINAL ── */
-.log-term {
-    background:#030608; border:1px solid #090f18; border-top:2px solid #0c3050;
-    border-radius:8px; padding:14px; height:255px; overflow-y:auto;
-    font-family:'Share Tech Mono',monospace; font-size:.76em; line-height:1.8;
-}
-.log-term::before {
-    content:'> TERMINAL — LIVE LOG STREAM'; display:block;
-    color:#0e2820; font-size:.85em; border-bottom:1px solid #090f18;
-    padding-bottom:7px; margin-bottom:7px; letter-spacing:.1em;
-}
-.lt-ts   { color:#183840; }
-.lt-text { color:#6aa090; }
-.lt-sep  { color:#0a1818; }
-.lt-flag { color:#ff3366; }
-.lt-empty{ color:#132020; font-style:italic; }
+    /* ── Plotly charts ── */
+    .js-plotly-plot .plotly { background: transparent !important; }
 
-/* ── ALERT ITEMS ── */
-.alert-item {
-    background:#07111a; border:1px solid #0e2030; border-left:3px solid;
-    border-radius:6px; padding:9px 13px; margin-bottom:7px;
-    display:flex; justify-content:space-between; align-items:center;
-    font-family:'Share Tech Mono',monospace; font-size:.74em;
-    transition: background .15s;
-}
-.alert-item:hover { background:#0a1825; }
-.alert-item.crit  { border-left-color:#ff3366; }
-.alert-item.warn  { border-left-color:#ffaa00; }
-.a-score { font-weight:700; }
-.a-ts    { color:#1e3848; font-size:.9em; }
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #010409; }
+    ::-webkit-scrollbar-thumb { background: #21262d; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #388bfd; }
 
-/* ── DETECTION CHIPS ── */
-.det-chip {
-    display:inline-flex; align-items:center;
-    padding:3px 9px; border-radius:4px; border:1px solid;
-    font-family:'Share Tech Mono',monospace; font-size:.69em; font-weight:700;
-    letter-spacing:.04em; margin-right:4px; margin-bottom:4px;
-}
-.chip-email { background:rgba(0,170,255,.07); color:#00aaff; border-color:rgba(0,170,255,.25); }
-.chip-cb    { background:rgba(255,51,102,.07); color:#ff3366; border-color:rgba(255,51,102,.25); }
-.chip-tel   { background:rgba(255,170,0,.07);  color:#ffaa00; border-color:rgba(255,170,0,.25); }
-.chip-secu  { background:rgba(187,0,255,.07);  color:#bb00ff; border-color:rgba(187,0,255,.25); }
-.chip-pw    { background:rgba(255,100,0,.07);  color:#ff6400; border-color:rgba(255,100,0,.25); }
-.chip-def   { background:rgba(80,80,80,.07);   color:#668; border-color:rgba(80,80,80,.25); }
-
-/* ── SENTIMENT ROWS ── */
-.sent-row {
-    background:#07111a; border:1px solid #0c1e2c; border-radius:6px;
-    padding:9px 12px; margin-bottom:6px;
-    font-family:'Share Tech Mono',monospace; font-size:.73em;
-}
-.sr-text { color:#80a898; margin-bottom:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.sr-meta { display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; }
-.sr-bar  { background:#0a1820; border-radius:3px; height:3px; overflow:hidden; }
-
-/* ── SIDEBAR ── */
-[data-testid="stSidebar"] {
-    background:#060a0f !important;
-    border-right:1px solid #0c1e2c !important;
-}
-.sb-logo {
-    background:linear-gradient(135deg,#060f1a,#091a2c);
-    border-bottom:1px solid #0c1e2c;
-    padding:18px 14px; margin-bottom:14px; text-align:center;
-}
-.sb-logo .sb-title { font-family:'Orbitron',monospace; font-size:.95em; font-weight:900; color:#00ff88; letter-spacing:.1em; }
-.sb-logo .sb-sub   { font-family:'Share Tech Mono',monospace; font-size:.62em; color:#1e4a28; margin-top:3px; }
-.file-row { font-family:'Share Tech Mono',monospace; font-size:.7em; margin:3px 0; display:flex; align-items:center; gap:5px; }
-.f-ok    { color:#00ff88; }
-.f-miss  { color:#ff3366; }
-.ethics  {
-    background:rgba(255,51,102,.04); border:1px solid rgba(255,51,102,.12);
-    border-radius:6px; padding:10px 12px;
-    font-family:'Share Tech Mono',monospace; font-size:.62em; color:#2a3a42; line-height:1.8;
-}
-
-/* ── Streamlit overrides ── */
-div[data-baseweb="select"] > div { background:#070e17 !important; border-color:#0c2230 !important; color:#a0b4c0 !important; }
-.stButton > button {
-    background:#07111a; border:1px solid #0c3050; color:#00ff88;
-    border-radius:5px; font-family:'Share Tech Mono',monospace; font-size:.78em;
-    transition:all .2s;
-}
-.stButton > button:hover { background:#0c1e2e; border-color:#00ff88; box-shadow:0 0 10px rgba(0,255,136,.15); }
-
-/* ── Scrollbar ── */
-::-webkit-scrollbar { width:5px; height:5px; }
-::-webkit-scrollbar-track { background:#060a0f; }
-::-webkit-scrollbar-thumb { background:#0c2030; border-radius:3px; }
-::-webkit-scrollbar-thumb:hover { background:#00ff88; }
-
-.js-plotly-plot .plotly { background:transparent !important; }
+    /* ── Streamlit overrides ── */
+    .stSelectbox > div > div { background: #0d1117; border-color: #21262d; color: #e6edf3; }
+    .stSlider > div { color: #e6edf3; }
+    div[data-testid="metric-container"] { background: #0d1117; border: 1px solid #21262d;
+                                          border-radius: 8px; padding: 12px; }
+    .stAlert { border-radius: 8px; }
+    button[kind="primary"] { background: #388bfd; border: none; border-radius: 6px; }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Constantes Plotly
-# ─────────────────────────────────────────────────────────────────────────────
-_PL = dict(
+# ---------------------------------------------------------------------------
+# Helpers — Chargement des données
+# ---------------------------------------------------------------------------
+
+def load_json_safe(path: Path) -> list:
+    if not path.exists():
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def read_log_tail(path: Path, n_lines: int = 60) -> list:
+    if not path.exists():
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        return lines[-n_lines:]
+    except Exception:
+        return []
+
+
+def load_all() -> dict:
+    return {
+        "sentiments":  load_json_safe(DATA / "sentiments.json"),
+        "alerts":      load_json_safe(DATA / "alerts.json"),
+        "detections":  load_json_safe(DATA / "detections.json"),
+        "metadata":    load_json_safe(DATA / "metadata.json"),
+        "log_lines":   read_log_tail(DATA / "log.txt"),
+        "ts":          datetime.now(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# KPI computation
+# ---------------------------------------------------------------------------
+
+def compute_kpis(data: dict) -> dict:
+    sents = data["sentiments"]
+    alerts = data["alerts"]
+    dets   = data["detections"]
+
+    scores = [s.get("score", 0) for s in sents]
+    avg_score = round(sum(scores) / len(scores), 3) if scores else 0.0
+
+    labels = [s.get("sentiment", "neutre") for s in sents]
+    pos_pct = int(labels.count("positif") * 100 / len(labels)) if labels else 0
+
+    recent_alerts = [a for a in alerts
+                     if _is_recent(a.get("timestamp", ""), minutes=60)]
+
+    sensitive_today = sum(1 for d in dets if d.get("has_sensitive"))
+
+    return {
+        "total_phrases":     len(sents),
+        "avg_score":         avg_score,
+        "positive_pct":      pos_pct,
+        "total_alerts":      len(alerts),
+        "recent_alerts":     len(recent_alerts),
+        "sensitive_count":   sensitive_today,
+        "metadata_count":    len(data["metadata"]),
+    }
+
+
+def _is_recent(ts_str: str, minutes: int = 60) -> bool:
+    try:
+        dt = datetime.fromisoformat(ts_str)
+        return datetime.now() - dt < timedelta(minutes=minutes)
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Plotly helpers — dark theme unifié
+# ---------------------------------------------------------------------------
+
+DARK_LAYOUT = dict(
     paper_bgcolor="rgba(0,0,0,0)",
     plot_bgcolor="rgba(0,0,0,0)",
-    font=dict(family="Share Tech Mono", color="#2a5a48", size=10),
-    margin=dict(l=34, r=14, t=34, b=34),
-    xaxis=dict(gridcolor="#08141e", linecolor="#08141e", zerolinecolor="#08141e",
-               tickfont=dict(color="#1e4838", size=9)),
-    yaxis=dict(gridcolor="#08141e", linecolor="#08141e", zerolinecolor="#08141e",
-               tickfont=dict(color="#1e4838", size=9)),
-    legend=dict(bgcolor="rgba(0,0,0,0)", bordercolor="#08141e",
-                font=dict(color="#2a5a48", size=9)),
-    hoverlabel=dict(bgcolor="#07111a", bordercolor="#0c2230",
-                    font=dict(family="Share Tech Mono", color="#a0b4c0", size=11)),
+    font=dict(family="JetBrains Mono", color="#8b949e", size=11),
+    margin=dict(l=40, r=20, t=40, b=40),
+    xaxis=dict(gridcolor="#21262d", linecolor="#21262d", zerolinecolor="#21262d"),
+    yaxis=dict(gridcolor="#21262d", linecolor="#21262d", zerolinecolor="#21262d"),
+    legend=dict(bgcolor="rgba(0,0,0,0)", bordercolor="#21262d"),
 )
 
-def _pcfg() -> dict:
-    return {"displayModeBar": False, "responsive": True}
 
-def _empty_fig(msg: str = "NO DATA", h: int = 220) -> go.Figure:
+def chart_sentiment_timeline(sentiments: list) -> go.Figure:
+    if not sentiments:
+        return _empty_chart("Aucune donnée de sentiment")
+
+    recent = sentiments[-80:]
+    ts     = [s["timestamp"] for s in recent]
+    scores = [s.get("score", 0) for s in recent]
+    labels = [s.get("sentiment", "neutre") for s in recent]
+
+    color_map = {"positif": "#3fb950", "négatif": "#f85149", "neutre": "#8b949e",
+                 "trop_court": "#484f58"}
+    marker_colors = [color_map.get(l, "#8b949e") for l in labels]
+
     fig = go.Figure()
-    fig.add_annotation(text=msg, x=.5, y=.5, xref="paper", yref="paper",
-                       showarrow=False,
-                       font=dict(size=11, color="#1a3a2e", family="Share Tech Mono"))
-    l = dict(**_PL)
-    l.update(height=h, xaxis=dict(visible=False), yaxis=dict(visible=False))
-    fig.update_layout(**l)
+    # Zones
+    fig.add_hrect(y0=0.05, y1=1,    fillcolor="#3fb950", opacity=0.05, line_width=0)
+    fig.add_hrect(y0=-0.05, y1=0.05, fillcolor="#8b949e", opacity=0.04, line_width=0)
+    fig.add_hrect(y0=-1, y1=-0.05,  fillcolor="#f85149", opacity=0.05, line_width=0)
+
+    fig.add_trace(go.Scatter(
+        x=ts, y=scores, mode="lines+markers",
+        name="Sentiment",
+        line=dict(color="#388bfd", width=1.5, shape="spline", smoothing=0.8),
+        marker=dict(color=marker_colors, size=7, line=dict(color="#0a0e17", width=1)),
+        hovertemplate="<b>%{x}</b><br>Score: %{y:.4f}<extra></extra>",
+        fill="tozeroy",
+        fillcolor="rgba(56,139,253,0.05)",
+    ))
+    fig.add_hline(y=0, line_dash="dot", line_color="#21262d")
+
+    layout = dict(**DARK_LAYOUT)
+    layout.update(title=dict(text="Évolution des sentiments", font=dict(color="#e6edf3", size=13)),
+                  yaxis=dict(**DARK_LAYOUT["yaxis"], range=[-1.1, 1.1]),
+                  height=280)
+    fig.update_layout(**layout)
     return fig
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Data helpers
-# ─────────────────────────────────────────────────────────────────────────────
+def chart_delay_histogram(metadata: list) -> go.Figure:
+    if not metadata:
+        return _empty_chart("Aucune méta-donnée de frappe")
 
-def _load_json(p: Path) -> list:
-    if not p.exists(): return []
-    try:
-        d = json.loads(p.read_text(encoding="utf-8"))
-        return d if isinstance(d, list) else []
-    except Exception: return []
+    delays = [m["inter_key_delay"] for m in metadata
+              if 0.005 < m.get("inter_key_delay", 0) < 1.5]
+    if not delays:
+        return _empty_chart("Délais insuffisants")
 
-def _log_tail(p: Path, n: int = 80) -> list:
-    if not p.exists(): return []
-    try: return p.read_text(encoding="utf-8").splitlines()[-n:]
-    except Exception: return []
-
-@st.cache_data(ttl=4)
-def load_data() -> dict:
-    return {
-        "sentiments": _load_json(DATA / "sentiments.json"),
-        "alerts":     _load_json(DATA / "alerts.json"),
-        "detections": _load_json(DATA / "detections.json"),
-        "metadata":   _load_json(DATA / "metadata.json"),
-        "log_lines":  _log_tail(DATA / "log.txt"),
-        "ts":         datetime.now(),
-    }
-
-def _is_recent(ts: str, minutes: int = 60) -> bool:
-    try: return datetime.now() - datetime.fromisoformat(ts) < timedelta(minutes=minutes)
-    except Exception: return False
-
-def _kpis(d: dict) -> dict:
-    sents  = d["sentiments"]
-    alerts = d["alerts"]
-    dets   = d["detections"]
-    scores = [s.get("score",0) for s in sents]
-    labels = [s.get("sentiment","neutre") for s in sents]
-    avg_s  = round(sum(scores)/len(scores),3) if scores else 0.0
-    pos_pc = int(labels.count("positif")*100/len(labels)) if labels else 0
-    rec_al = sum(1 for a in alerts if _is_recent(a.get("timestamp",""), 60))
-    sen_ct = sum(1 for r in dets if r.get("has_sensitive"))
-    threat = min(100, rec_al*20 + sen_ct*5 + (15 if avg_s < -0.3 else 0))
-    return dict(n_phrases=len(sents), avg_score=avg_s, pos_pct=pos_pc,
-                n_alerts=len(alerts), rec_alerts=rec_al,
-                sensitive=sen_ct, n_meta=len(d["metadata"]), threat=threat)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Charts  ← chaque appel a un key= unique passé en argument (FIX BUG)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def chart_sentiment_tl(sents: list, key: str) -> None:
-    if not sents:
-        st.plotly_chart(_empty_fig("[ NO SENTIMENT DATA ]"), use_container_width=True,
-                        config=_pcfg(), key=key)
-        return
-    recent = sents[-100:]
-    ts     = [s.get("timestamp","") for s in recent]
-    scores = [s.get("score",0) for s in recent]
-    labels = [s.get("sentiment","neutre") for s in recent]
-    cmap   = {"positif":"#00ff88","négatif":"#ff3366","neutre":"#2a6050","trop_court":"#1a3028"}
-    mcolors= [cmap.get(l,"#2a6050") for l in labels]
-    fig = go.Figure()
-    fig.add_hrect(y0=0.05,  y1=1,    fillcolor="#00ff88", opacity=0.03, line_width=0)
-    fig.add_hrect(y0=-0.05, y1=0.05, fillcolor="#2a6050", opacity=0.02, line_width=0)
-    fig.add_hrect(y0=-1,    y1=-0.05,fillcolor="#ff3366", opacity=0.03, line_width=0)
-    fig.add_trace(go.Scatter(
-        x=ts, y=scores, mode="lines+markers",
-        line=dict(color="#00aaff", width=1.5, shape="spline", smoothing=0.7),
-        marker=dict(color=mcolors, size=6, line=dict(color="#060a0f", width=1)),
-        fill="tozeroy", fillcolor="rgba(0,170,255,0.04)",
-        hovertemplate="<b>%{x|%H:%M:%S}</b><br>score: %{y:.4f}<extra></extra>",
-    ))
-    fig.add_hline(y=0, line_dash="dot", line_color="#0c2030")
-    l = dict(**_PL)
-    l.update(title=dict(text="SENTIMENT STREAM", font=dict(color="#2a6040",size=11)),
-             yaxis=dict(**_PL["yaxis"], range=[-1.1,1.1]), height=250)
-    fig.update_layout(**l)
-    st.plotly_chart(fig, use_container_width=True, config=_pcfg(), key=key)
-
-
-def chart_delay_hist(meta: list, key: str) -> None:
-    delays = [m["inter_key_delay"] for m in meta
-              if 0.005 < m.get("inter_key_delay",0) < 2.0]
-    if len(delays) < 5:
-        st.plotly_chart(_empty_fig("[ AWAITING KEYSTROKE DATA ]"), use_container_width=True,
-                        config=_pcfg(), key=key)
-        return
-    avg = sum(delays)/len(delays)
     fig = go.Figure()
     fig.add_trace(go.Histogram(
-        x=delays, nbinsx=45, marker_color="#00aaff", opacity=0.6,
-        histnorm="probability density",
-        hovertemplate="delay: %{x:.3f}s<extra></extra>",
+        x=delays, nbinsx=40,
+        marker_color="#388bfd", opacity=0.7,
+        histnorm="probability density", name="Délais",
     ))
-    fig.add_vline(x=avg, line_dash="dash", line_color="#00ff88", line_width=1.5,
+    avg = sum(delays) / len(delays)
+    fig.add_vline(x=avg, line_dash="dash", line_color="#d29922",
                   annotation_text=f"μ={avg:.3f}s",
-                  annotation_font=dict(color="#00ff88", size=9, family="Share Tech Mono"),
-                  annotation_position="top right")
-    l = dict(**_PL)
-    l.update(title=dict(text="INTER-KEY DELAY DISTRIBUTION", font=dict(color="#2a6040",size=11)),
-             xaxis_title="seconds", bargap=0.02, height=250)
-    fig.update_layout(**l)
-    st.plotly_chart(fig, use_container_width=True, config=_pcfg(), key=key)
+                  annotation_font_color="#d29922", annotation_font_size=10)
+
+    layout = dict(**DARK_LAYOUT)
+    layout.update(title=dict(text="Distribution des délais inter-touches", font=dict(color="#e6edf3", size=13)),
+                  xaxis_title="Délai (s)", height=280, bargap=0.02)
+    fig.update_layout(**layout)
+    return fig
 
 
-def chart_heatmap(meta: list, key: str) -> None:
-    days = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
-    mx   = [[0]*24 for _ in range(7)]
-    for m in meta:
+def chart_activity_heatmap(metadata: list) -> go.Figure:
+    if not metadata:
+        return _empty_chart("Aucune méta-donnée de frappe")
+
+    days_fr = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]
+    matrix  = [[0] * 24 for _ in range(7)]
+
+    for m in metadata:
         try:
             dt = datetime.fromtimestamp(m["timestamp"])
-            mx[dt.weekday()][dt.hour] += 1
-        except Exception: continue
+            matrix[dt.weekday()][dt.hour] += 1
+        except Exception:
+            continue
+
     fig = go.Figure(data=go.Heatmap(
-        z=mx, x=list(range(24)), y=days,
-        colorscale=[[0,"#060a0f"],[0.3,"#052418"],[0.7,"#094024"],[1,"#00ff88"]],
-        hoverongaps=False, showscale=False,
-        hovertemplate="%{y} %{x}h — %{z} keys<extra></extra>",
+        z=matrix, x=list(range(24)), y=days_fr,
+        colorscale=[[0, "#010409"], [0.3, "#0d2d4e"], [0.7, "#1a4d8a"], [1, "#388bfd"]],
+        hoverongaps=False,
+        hovertemplate="Jour:%{y}  Heure:%{x}h  Frappes:%{z}<extra></extra>",
+        showscale=True,
+        colorbar=dict(bgcolor="rgba(0,0,0,0)", tickfont=dict(color="#8b949e")),
     ))
-    l = dict(**_PL)
-    l.update(title=dict(text="ACTIVITY HEATMAP", font=dict(color="#2a6040",size=11)),
-             xaxis=dict(**_PL["xaxis"], dtick=4),
-             height=250)
-    fig.update_layout(**l)
-    st.plotly_chart(fig, use_container_width=True, config=_pcfg(), key=key)
+    layout = dict(**DARK_LAYOUT)
+    layout.update(title=dict(text="Activité horaire", font=dict(color="#e6edf3", size=13)),
+                  xaxis=dict(**DARK_LAYOUT["xaxis"], title="Heure", dtick=3,
+                             tickfont=dict(color="#8b949e", size=10)),
+                  yaxis=dict(**DARK_LAYOUT["yaxis"], tickfont=dict(color="#8b949e", size=10)),
+                  height=280)
+    fig.update_layout(**layout)
+    return fig
 
 
-def chart_anomaly(alerts: list, key: str) -> None:
+def chart_anomaly_scatter(alerts: list) -> go.Figure:
     if not alerts:
-        st.plotly_chart(_empty_fig("[ SYSTEM NOMINAL — NO ANOMALIES ✓ ]"),
-                        use_container_width=True, config=_pcfg(), key=key)
-        return
-    ts     = [a.get("timestamp","") for a in alerts]
-    scores = [a.get("score",-0.5) for a in alerts]
-    cols   = ["#ff3366" if _is_recent(a.get("timestamp",""),60) else "#1e3848" for a in alerts]
+        return _empty_chart("Aucune anomalie détectée ✅")
+
+    ts     = [a["timestamp"] for a in alerts]
+    scores = [a.get("score", -0.5) for a in alerts]
+    recent = [_is_recent(a.get("timestamp", ""), 60) for a in alerts]
+    colors = ["#f85149" if r else "#8b949e" for r in recent]
+
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=ts, y=scores, mode="markers",
-        marker=dict(color=cols, size=10, symbol="x-thin",
-                    line=dict(color=cols, width=2.5)),
-        hovertemplate="<b>%{x|%H:%M:%S}</b><br>score: %{y:.4f}<extra></extra>",
+        marker=dict(color=colors, size=11, symbol="x-thin",
+                    line=dict(color=colors, width=2.5)),
+        hovertemplate="<b>%{x}</b><br>Score: %{y:.4f}<extra></extra>",
+        name="Anomalie",
     ))
-    fig.add_hline(y=0, line_dash="dot", line_color="#0c2030")
-    l = dict(**_PL)
-    l.update(title=dict(text="ANOMALY TIMELINE · ISOLATION FOREST", font=dict(color="#2a6040",size=11)),
-             yaxis_title="decision score", height=250)
-    fig.update_layout(**l)
-    st.plotly_chart(fig, use_container_width=True, config=_pcfg(), key=key)
+    fig.add_hline(y=0, line_dash="dot", line_color="#21262d")
+
+    layout = dict(**DARK_LAYOUT)
+    layout.update(title=dict(text="Timeline des anomalies", font=dict(color="#e6edf3", size=13)),
+                  yaxis_title="Score Isolation Forest",
+                  height=260)
+    fig.update_layout(**layout)
+    return fig
 
 
-def chart_donut(dets: list, key: str) -> None:
+def chart_sensitive_donut(detections: list) -> go.Figure:
+    import collections
     counts: dict = collections.Counter()
-    for r in dets:
-        for d in r.get("detections",[]): counts[d["type"]] += 1
+    for r in detections:
+        for d in r.get("detections", []):
+            counts[d["type"]] += 1
+
     if not counts:
-        st.plotly_chart(_empty_fig("[ NO SENSITIVE DATA ✓ ]"),
-                        use_container_width=True, config=_pcfg(), key=key)
-        return
-    colors = ["#ff3366","#ffaa00","#00aaff","#bb00ff","#ff6400","#00ff88"]
+        return _empty_chart("Aucune donnée sensible détectée ✅")
+
+    colors = ["#f85149", "#d29922", "#388bfd", "#3fb950", "#7b2fff", "#ff6b6b"]
     fig = go.Figure(data=go.Pie(
-        labels=list(counts.keys()), values=list(counts.values()),
-        hole=0.56,
-        marker=dict(colors=colors[:len(counts)], line=dict(color="#060a0f", width=2)),
-        textfont=dict(family="Share Tech Mono", color="#a0b4c0", size=10),
+        labels=list(counts.keys()),
+        values=list(counts.values()),
+        hole=0.55,
+        marker=dict(colors=colors[:len(counts)], line=dict(color="#0a0e17", width=2)),
+        textfont=dict(family="JetBrains Mono", color="#e6edf3"),
         hovertemplate="%{label}: %{value}<extra></extra>",
     ))
-    total = sum(counts.values())
-    fig.add_annotation(text=f"<b>{total}</b>", x=.5, y=.5, showarrow=False,
-                       font=dict(size=18, color="#ff3366", family="Orbitron"))
-    l = dict(**_PL)
-    l.update(title=dict(text="SENSITIVE DATA BREAKDOWN", font=dict(color="#2a6040",size=11)),
-             height=250, showlegend=True)
-    fig.update_layout(**l)
-    st.plotly_chart(fig, use_container_width=True, config=_pcfg(), key=key)
+    fig.add_annotation(text=f"<b>{sum(counts.values())}</b><br><span style='font-size:10'>détections</span>",
+                       x=0.5, y=0.5, showarrow=False,
+                       font=dict(size=16, color="#e6edf3", family="JetBrains Mono"))
+    layout = dict(**DARK_LAYOUT)
+    layout.update(title=dict(text="Données sensibles — répartition", font=dict(color="#e6edf3", size=13)),
+                  height=280, showlegend=True)
+    fig.update_layout(**layout)
+    return fig
 
 
-def chart_gauge(score: int, key: str) -> None:
-    if   score < 20: col, txt = "#00ff88", "LOW"
-    elif score < 50: col, txt = "#ffaa00", "MEDIUM"
-    elif score < 75: col, txt = "#ff6400", "HIGH"
-    else:            col, txt = "#ff3366", "CRITICAL"
-    fig = go.Figure(go.Indicator(
-        mode="gauge+number", value=score,
-        domain=dict(x=[0,1], y=[0,1]),
-        gauge=dict(
-            axis=dict(range=[0,100], tickcolor="#0c2030",
-                      tickfont=dict(color="#1e3830",size=8,family="Share Tech Mono")),
-            bar=dict(color=col, thickness=0.26),
-            bgcolor="#060a0f", borderwidth=1, bordercolor="#0c2030",
-            steps=[
-                dict(range=[0,20],  color="#060f16"),
-                dict(range=[20,50], color="#091418"),
-                dict(range=[50,75], color="#0e1818"),
-                dict(range=[75,100],color="#140810"),
-            ],
-            threshold=dict(line=dict(color=col,width=2), thickness=0.8, value=score),
-        ),
-        number=dict(font=dict(family="Orbitron",size=30,color=col)),
-    ))
-    l = dict(**_PL)
-    l.update(title=dict(text=f"THREAT LEVEL · {txt}",
-                        font=dict(color=col,size=11,family="Share Tech Mono")), height=250)
-    fig.update_layout(**l)
-    st.plotly_chart(fig, use_container_width=True, config=_pcfg(), key=key)
+def _empty_chart(msg: str) -> go.Figure:
+    fig = go.Figure()
+    fig.add_annotation(text=msg, x=0.5, y=0.5, xref="paper", yref="paper",
+                       showarrow=False, font=dict(size=13, color="#484f58",
+                                                   family="JetBrains Mono"))
+    layout = dict(**DARK_LAYOUT)
+    layout.update(height=260, xaxis=dict(visible=False), yaxis=dict(visible=False))
+    fig.update_layout(**layout)
+    return fig
 
 
-def chart_sent_bar(sents: list, key: str) -> None:
-    if not sents:
-        st.plotly_chart(_empty_fig("[ NO DATA ]", 180), use_container_width=True,
-                        config=_pcfg(), key=key)
-        return
-    counts = collections.Counter(s.get("sentiment","neutre") for s in sents)
-    cats   = ["positif","neutre","négatif"]
-    vals   = [counts.get(c,0) for c in cats]
-    fig = go.Figure(go.Bar(
-        x=cats, y=vals, marker_color=["#00ff88","#2a6050","#ff3366"],
-        opacity=0.65, hovertemplate="%{x}: %{y}<extra></extra>",
-    ))
-    l = dict(**_PL)
-    l.update(title=dict(text="SENTIMENT DISTRIBUTION",font=dict(color="#2a6040",size=11)),
-             height=200, showlegend=False, bargap=0.3)
-    fig.update_layout(**l)
-    st.plotly_chart(fig, use_container_width=True, config=_pcfg(), key=key)
+def plotly_cfg() -> dict:
+    return {"displayModeBar": False, "responsive": True}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# UI COMPONENTS (sans graphiques — pas de key nécessaire)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def ui_header(k: dict, ts: datetime) -> None:
-    t = k["threat"]
-    if   t < 20: cls, txt = "s-nominal",  "NOMINAL"
-    elif t < 50: cls, txt = "s-elevated", "ELEVATED"
-    else:        cls, txt = "s-critical", "CRITICAL"
-    st.markdown(f"""
-    <div class="soc-header">
-        <div>
-            <h1>🛡️ SOC · AI KEYLOGGER DASHBOARD</h1>
-            <p>LAST UPDATE: {ts.strftime('%Y-%m-%d  %H:%M:%S')}
-             &nbsp;·&nbsp; {k['n_phrases']} phrases
-             &nbsp;·&nbsp; {k['n_meta']} keystrokes
-             &nbsp;·&nbsp; {k['n_alerts']} total alerts</p>
-        </div>
-        <div style="text-align:right;">
-            <div class="status-label">SYSTEM STATUS</div>
-            <div class="status-val {cls}">{txt}</div>
-        </div>
-    </div>""", unsafe_allow_html=True)
-
-
-def ui_kpis(k: dict) -> None:
-    s  = k["avg_score"]
-    sc = "c-green" if s>0.05 else ("c-red" if s<-0.05 else "c-blue")
-    sl = "POSITIVE" if s>0.05 else ("NEGATIVE" if s<-0.05 else "NEUTRAL")
-    ac = "c-red"    if k["rec_alerts"] > 0 else "c-green"
-    ad = "c-orange" if k["sensitive"]  > 0 else "c-green"
-    t  = k["threat"]
-    tc = "c-green" if t<20 else ("c-orange" if t<50 else "c-red")
-    tb = "b-green" if t<20 else ("b-orange" if t<50 else "b-red")
-    tl = "LOW RISK" if t<20 else ("MEDIUM" if t<50 else ("HIGH" if t<75 else "CRITICAL"))
-
-    st.markdown(f"""
-    <div class="kpi-row">
-      <div class="kpi-card">
-        <div class="top-bar b-blue"></div><div class="ico">⌨️</div>
-        <div class="val c-blue">{k['n_meta']:,}</div>
-        <div class="lbl">Keystrokes</div>
-        <div class="sub">{k['n_phrases']} phrases analyzed</div>
-        <div class="kpi-spark"></div>
-      </div>
-      <div class="kpi-card">
-        <div class="top-bar b-green"></div><div class="ico">🧠</div>
-        <div class="val {sc}">{s:+.3f}</div>
-        <div class="lbl">Avg Sentiment</div>
-        <div class="sub">{sl} · {k['pos_pct']}% positive</div>
-        <div class="kpi-spark"></div>
-      </div>
-      <div class="kpi-card">
-        <div class="top-bar {'b-red' if k['rec_alerts']>0 else 'b-green'}"></div><div class="ico">⚠️</div>
-        <div class="val {ac}">{k['rec_alerts']}</div>
-        <div class="lbl">Alerts (60 min)</div>
-        <div class="sub">Cumulated: {k['n_alerts']}</div>
-        <div class="kpi-spark"></div>
-      </div>
-      <div class="kpi-card">
-        <div class="top-bar {'b-orange' if k['sensitive']>0 else 'b-green'}"></div><div class="ico">🔒</div>
-        <div class="val {ad}">{k['sensitive']}</div>
-        <div class="lbl">Sensitive Data</div>
-        <div class="sub">email · CB · phone · sécu</div>
-        <div class="kpi-spark"></div>
-      </div>
-      <div class="kpi-card">
-        <div class="top-bar {tb}"></div><div class="ico">🛡️</div>
-        <div class="val {tc}">{t}</div>
-        <div class="lbl">Threat Score /100</div>
-        <div class="sub">{tl}</div>
-        <div class="kpi-spark"></div>
-      </div>
-    </div>""", unsafe_allow_html=True)
-
-
-def ui_scanbar(refresh: int, ts: datetime) -> None:
-    st.markdown(f"""
-    <div class="scan-bar">
-        <span class="live-dot">LIVE MONITORING</span>
-        <span>refresh every {refresh}s</span>
-        <span style="color:#1a3830;">ISOLATION FOREST &nbsp;|&nbsp; VADER NLP &nbsp;|&nbsp; REGEX ENGINE</span>
-        <span style="color:#1a3830;">{ts.strftime('%H:%M:%S')}</span>
-    </div>""", unsafe_allow_html=True)
-
-
-def ui_log(lines: list, n: int) -> None:
-    st.markdown('<div class="sec-hdr">📋 LIVE LOG STREAM</div>', unsafe_allow_html=True)
-    html = ""
-    for line in lines[-n:]:
-        line = line.rstrip()
-        if not line: continue
-        if line.startswith("[20"):
-            html += f'<div><span class="lt-ts">{line}</span></div>'
-        elif line.startswith("—") or line.startswith("─"):
-            html += f'<div class="lt-sep">{line}</div>'
-        else:
-            safe = line[:130] + ("…" if len(line)>130 else "")
-            # Highlight emails
-            safe = re.sub(r'(\b[\w.+\-]+@[\w\-]+\.[a-z]{2,}\b)',
-                          r'<span class="lt-flag">\1</span>', safe)
-            html += f'<div><span class="lt-text">{safe}</span></div>'
-    if not html:
-        html = '<div class="lt-empty">[ WAITING FOR DATA — launch keylogger.py ]</div>'
-    st.markdown(f'<div class="log-term">{html}</div>', unsafe_allow_html=True)
-
-
-def ui_alerts(alerts: list) -> None:
-    st.markdown('<div class="sec-hdr">🚨 RECENT ALERTS</div>', unsafe_allow_html=True)
-    recent = [a for a in alerts if _is_recent(a.get("timestamp",""), 120)][-8:]
-    if not recent:
-        st.markdown('<div class="panel" style="text-align:center;color:#1a4a30;'
-                    'font-family:Share Tech Mono,monospace;font-size:.78em;padding:18px;">'
-                    '◉ &nbsp; SYSTEM NOMINAL — NO ANOMALIES</div>', unsafe_allow_html=True)
-        return
-    for a in reversed(recent):
-        score = a.get("score",0)
-        ts    = a.get("timestamp","")[:19]
-        sev   = "CRITICAL" if score<-0.6 else "WARNING"
-        cls   = "crit" if sev=="CRITICAL" else "warn"
-        col   = "#ff3366" if cls=="crit" else "#ffaa00"
-        st.markdown(f"""
-        <div class="alert-item {cls}">
-            <div>
-                <span style="color:{col};font-family:Share Tech Mono,monospace;
-                             font-weight:700;font-size:.82em;">[{sev}]</span>
-                <span class="a-score" style="color:{col};margin-left:10px;">
-                    score={score:.4f}</span>
-            </div>
-            <span class="a-ts">{ts}</span>
-        </div>""", unsafe_allow_html=True)
-
-
-_CHIP_CSS = {
-    "email":"chip-email","carte_bancaire":"chip-cb",
-    "telephone_fr":"chip-tel","numero_secu_fr":"chip-secu",
-    "mot_de_passe_probable":"chip-pw",
-}
-
-def ui_detections(dets: list) -> None:
-    st.markdown('<div class="sec-hdr">🔒 SENSITIVE DATA</div>', unsafe_allow_html=True)
-    recent = [r for r in dets if r.get("has_sensitive")][-8:]
-    if not recent:
-        st.markdown('<div class="panel" style="text-align:center;color:#1a4a30;'
-                    'font-family:Share Tech Mono,monospace;font-size:.78em;padding:18px;">'
-                    '◉ &nbsp; NO SENSITIVE DATA DETECTED</div>', unsafe_allow_html=True)
-        return
-    for r in reversed(recent):
-        ts    = r.get("timestamp","")[:19]
-        chips = "".join(
-            f'<span class="det-chip {_CHIP_CSS.get(d["type"],"chip-def")}">'
-            f'{d["type"].replace("_"," ").upper()}</span>'
-            for d in r.get("detections",[])
-        )
-        st.markdown(f"""
-        <div class="panel" style="padding:9px 13px;display:flex;
-             justify-content:space-between;align-items:center;">
-            <div>{chips}</div>
-            <span style="font-family:Share Tech Mono,monospace;font-size:.68em;
-                         color:#1a3040;">{ts}</span>
-        </div>""", unsafe_allow_html=True)
-
-
-def ui_sent_table(sents: list) -> None:
-    st.markdown('<div class="sec-hdr">🧠 LATEST SENTIMENT ANALYSIS</div>', unsafe_allow_html=True)
-    if not sents:
-        st.markdown('<div class="panel" style="color:#1a3a30;font-family:Share Tech Mono,monospace;'
-                    'font-size:.78em;text-align:center;padding:18px;">[ NO DATA ]</div>',
-                    unsafe_allow_html=True)
-        return
-    cmap = {"positif":"#00ff88","négatif":"#ff3366","neutre":"#2a6050","trop_court":"#1a3028"}
-    html = ""
-    for s in reversed(sents[-10:]):
-        label = s.get("sentiment","neutre")
-        score = s.get("score",0)
-        text  = s.get("text","")[:65] + ("…" if len(s.get("text",""))>65 else "")
-        ts    = s.get("timestamp","")[:16]
-        col   = cmap.get(label,"#2a6050")
-        bar   = abs(score)*100
-        barc  = "#00ff88" if score>0 else "#ff3366"
-        html += f"""
-        <div class="sent-row">
-            <div class="sr-text">{text}</div>
-            <div class="sr-meta">
-                <span class="sr-score" style="color:{col};">{score:+.4f} [{label}]</span>
-                <span style="color:#1a3040;font-size:.85em;">{ts}</span>
-            </div>
-            <div class="sr-bar">
-                <div style="width:{bar:.0f}%;background:{barc};height:3px;border-radius:3px;"></div>
-            </div>
-        </div>"""
-    st.markdown(html, unsafe_allow_html=True)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
 # SIDEBAR
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
 
-def render_sidebar() -> dict:
+def render_sidebar(kpis: dict) -> dict:
     with st.sidebar:
         st.markdown("""
-        <div class="sb-logo">
-            <div class="sb-title">🛡️ AI KEYLOGGER</div>
-            <div class="sb-sub">SOC SUPERVISION · v2.0</div>
-        </div>""", unsafe_allow_html=True)
+        <div style='text-align:center; padding:16px 0 8px;'>
+            <div style='font-family:Syne,sans-serif; font-size:1.1em; font-weight:800; color:#e6edf3;'>
+                🔍 AI KEYLOGGER
+            </div>
+            <div style='font-family:JetBrains Mono,monospace; font-size:0.7em; color:#8b949e; margin-top:4px;'>
+                SUPERVISION DASHBOARD v1.0
+            </div>
+        </div>
+        <hr style='border:none; border-top:1px solid #21262d; margin:12px 0;'/>
+        """, unsafe_allow_html=True)
 
-        st.markdown("#### ⚙️ Controls")
-        refresh = st.slider("Refresh (s)", 2, 30, 5, key="sl_refresh")
-        view    = st.selectbox("View", [
-            "🖥️  Global Overview",
-            "🧠  Sentiments",
-            "⚠️   Anomaly Detection",
-            "🔒  Sensitive Data",
-            "📋  Log Stream",
-            "🛡️  Threat Intelligence",
-        ], key="sel_view")
-        n_log = st.slider("Log lines", 10, 120, 50, key="sl_log")
+        st.markdown("#### ⚙️ Contrôles")
+        refresh_interval = st.slider(
+            "Rafraîchissement (secondes)", min_value=2, max_value=30, value=5, step=1
+        )
+        view_mode = st.selectbox(
+            "Vue",
+            ["Vue globale", "Sentiments", "Anomalies", "Données sensibles", "Logs bruts"],
+            index=0,
+        )
+        n_log_lines = st.slider("Lignes de log à afficher", 10, 100, 40)
 
-        st.markdown("---")
-        st.markdown("#### 📂 Data Sources")
-        files = {
-            "log.txt":         (DATA/"log.txt").exists(),
-            "sentiments.json": (DATA/"sentiments.json").exists(),
-            "alerts.json":     (DATA/"alerts.json").exists(),
-            "detections.json": (DATA/"detections.json").exists(),
-            "metadata.json":   (DATA/"metadata.json").exists(),
+        st.markdown("<hr style='border:none; border-top:1px solid #21262d; margin:12px 0;'/>",
+                    unsafe_allow_html=True)
+
+        # Statut des fichiers
+        st.markdown("#### 📂 Sources de données")
+        files_status = {
+            "log.txt":        (DATA / "log.txt").exists(),
+            "sentiments.json":(DATA / "sentiments.json").exists(),
+            "alerts.json":    (DATA / "alerts.json").exists(),
+            "detections.json":(DATA / "detections.json").exists(),
+            "metadata.json":  (DATA / "metadata.json").exists(),
         }
-        rows = ""
-        for fname, ok in files.items():
-            cls  = "f-ok" if ok else "f-miss"
-            icon = "◉" if ok else "◌"
-            rows += f'<div class="file-row"><span class="{cls}">{icon}</span> {fname}</div>'
-        st.markdown(rows, unsafe_allow_html=True)
+        for fname, ok in files_status.items():
+            icon  = "🟢" if ok else "🔴"
+            color = "#3fb950" if ok else "#f85149"
+            st.markdown(
+                f"<div style='font-family:JetBrains Mono,monospace; font-size:0.75em;"
+                f"color:{color}; margin:3px 0'>{icon} {fname}</div>",
+                unsafe_allow_html=True,
+            )
 
-        st.markdown("---")
+        st.markdown("<hr style='border:none; border-top:1px solid #21262d; margin:12px 0;'/>",
+                    unsafe_allow_html=True)
+
+        # Actions
         st.markdown("#### 🛠️ Actions")
-        if st.button("🔄 Force Refresh",        use_container_width=True, key="btn_ref"):
-            st.cache_data.clear(); st.rerun()
-        if st.button("📊 Generate HTML Report", use_container_width=True, key="btn_rpt"):
+        if st.button("🔄 Forcer le rafraîchissement", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+
+        if st.button("📊 Générer rapport HTML", use_container_width=True):
             try:
                 from report_generator import generate_html_report
-                p = generate_html_report(str(DATA))
-                st.success(f"✅ {p}")
+                path = generate_html_report(str(DATA))
+                st.success(f"Rapport généré : {path}")
             except Exception as e:
-                st.error(f"Error: {e}")
-        if st.button("🗑️ Clear Cache",           use_container_width=True, key="btn_clr"):
-            st.cache_data.clear(); st.toast("Cache cleared", icon="🗑️")
+                st.error(f"Erreur : {e}")
 
-        st.markdown("---")
+        st.markdown("<hr style='border:none; border-top:1px solid #21262d; margin:12px 0;'/>",
+                    unsafe_allow_html=True)
+
+        # Avertissement éthique
         st.markdown("""
-        <div class="ethics">
-            ⚠ LEGAL NOTICE<br>
-            Authorized use only.<br>
-            Explicit consent required.<br>
-            FR: Loi Godfrain · RGPD<br>
-            Educational context only.
-        </div>""", unsafe_allow_html=True)
+        <div style='background:rgba(248,81,73,.08); border:1px solid rgba(248,81,73,.3);
+                    border-radius:8px; padding:12px; font-size:0.72em; color:#8b949e;
+                    font-family:JetBrains Mono,monospace; line-height:1.6;'>
+            ⚠️ Usage pédagogique uniquement.<br>
+            Consentement requis.<br>
+            Loi Godfrain — RGPD.
+        </div>
+        """, unsafe_allow_html=True)
 
-    return dict(refresh=refresh, view=view, n_log=n_log)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# VIEWS
-# ─────────────────────────────────────────────────────────────────────────────
-
-def view_global(d: dict, cfg: dict, k: dict) -> None:
-    ui_scanbar(cfg["refresh"], d["ts"])
-    c1, c2 = st.columns([2,1])
-    with c1:
-        st.markdown('<div class="sec-hdr">📈 SENTIMENT STREAM</div>', unsafe_allow_html=True)
-        chart_sentiment_tl(d["sentiments"], key="g_sent_tl")
-    with c2:
-        st.markdown('<div class="sec-hdr">🕐 ACTIVITY HEATMAP</div>', unsafe_allow_html=True)
-        chart_heatmap(d["metadata"], key="g_heatmap")
-
-    c3, c4 = st.columns(2)
-    with c3: ui_alerts(d["alerts"])
-    with c4: ui_detections(d["detections"])
-
-    c5, c6 = st.columns(2)
-    with c5:
-        st.markdown('<div class="sec-hdr">⌨️ INTER-KEY DELAYS</div>', unsafe_allow_html=True)
-        chart_delay_hist(d["metadata"], key="g_delay")
-    with c6:
-        st.markdown('<div class="sec-hdr">🔒 SENSITIVE DATA BREAKDOWN</div>', unsafe_allow_html=True)
-        chart_donut(d["detections"], key="g_donut")
-
-    c7, c8 = st.columns([3,2])
-    with c7: ui_log(d["log_lines"], cfg["n_log"])
-    with c8: ui_sent_table(d["sentiments"])
+    return {"refresh": refresh_interval, "view": view_mode, "n_log": n_log_lines}
 
 
-def view_sentiments(d: dict) -> None:
-    chart_sentiment_tl(d["sentiments"], key="s_tl")
-    c1, c2 = st.columns([2,1])
-    with c1:
-        chart_sent_bar(d["sentiments"], key="s_bar")
-    with c2:
-        sents = d["sentiments"]
-        if sents:
-            counts = collections.Counter(s.get("sentiment","neutre") for s in sents)
-            total  = len(sents)
-            for lbl, clr in [("positif","#00ff88"),("négatif","#ff3366"),("neutre","#2a6050")]:
-                pct = int(counts.get(lbl,0)*100/total)
-                st.markdown(f"""
-                <div class="panel" style="text-align:center;padding:14px 10px;margin-bottom:10px;">
-                    <div style="font-family:Orbitron,monospace;font-size:1.7em;font-weight:900;color:{clr};">{pct}%</div>
-                    <div style="font-family:Share Tech Mono,monospace;font-size:.68em;color:#1e4030;
-                                text-transform:uppercase;letter-spacing:.1em;margin-top:4px;">{lbl}</div>
-                </div>""", unsafe_allow_html=True)
-    ui_sent_table(d["sentiments"])
+# ---------------------------------------------------------------------------
+# HEADER
+# ---------------------------------------------------------------------------
 
-
-def view_anomalies(d: dict, k: dict) -> None:
-    c1, c2 = st.columns([3,1])
-    with c1:
-        chart_anomaly(d["alerts"], key="a_scatter")
-    with c2:
-        chart_gauge(k["threat"], key="a_gauge")
-    c3, c4 = st.columns(2)
-    with c3:
-        chart_delay_hist(d["metadata"], key="a_delay")
-    with c4:
-        ui_alerts(d["alerts"])
-
-
-def view_sensitive(d: dict) -> None:
-    c1, c2 = st.columns([1,2])
-    with c1:
-        chart_donut(d["detections"], key="sd_donut")
-    with c2:
-        ui_detections(d["detections"])
-
-
-def view_log(d: dict, n: int) -> None:
-    ui_log(d["log_lines"], n)
-
-
-def view_threat(d: dict, k: dict) -> None:
-    c1, c2, c3 = st.columns([1,2,1])
-    with c1: chart_gauge(k["threat"], key="ti_gauge")
-    with c2: chart_anomaly(d["alerts"], key="ti_anom")
-    with c3: chart_donut(d["detections"], key="ti_donut")
-
-    t  = k["threat"]
-    tc = "#00ff88" if t<20 else ("#ffaa00" if t<50 else ("#ff6400" if t<75 else "#ff3366"))
-    tl = "LOW" if t<20 else ("MEDIUM" if t<50 else ("HIGH" if t<75 else "CRITICAL"))
+def render_header(kpis: dict, ts: datetime) -> None:
+    alert_level = "CRITIQUE" if kpis["recent_alerts"] > 3 else (
+                  "ALERTE"   if kpis["recent_alerts"] > 0 else "NOMINAL")
+    alert_color = "#f85149" if alert_level == "CRITIQUE" else (
+                  "#d29922"  if alert_level == "ALERTE"   else "#3fb950")
 
     st.markdown(f"""
-    <div class="panel" style="padding:18px 22px;margin-top:6px;">
-        <div class="sec-hdr" style="margin-bottom:14px;">🛡️ THREAT ASSESSMENT REPORT</div>
-        <div style="font-family:Share Tech Mono,monospace;font-size:.78em;line-height:2.1;color:#3a6050;">
-            <span style="color:#1e4030;">THREAT LEVEL ......: </span>
-            <span style="color:{tc};font-weight:700;">{tl} ({t}/100)</span><br>
-            <span style="color:#1e4030;">RECENT ANOMALIES ..: </span>
-            <span style="color:{'#ff3366' if k['rec_alerts']>0 else '#00ff88'};">{k['rec_alerts']} (last 60 min)</span><br>
-            <span style="color:#1e4030;">SENSITIVE RECORDS .: </span>
-            <span style="color:{'#ffaa00' if k['sensitive']>0 else '#00ff88'};">{k['sensitive']} detected</span><br>
-            <span style="color:#1e4030;">SENTIMENT INDEX ...: </span>
-            <span style="color:{'#00ff88' if k['avg_score']>0 else '#ff3366'};">{k['avg_score']:+.3f}</span><br>
-            <span style="color:#1e4030;">TOTAL KEYSTROKES ..: </span>
-            <span style="color:#3a6050;">{k['n_meta']:,}</span><br>
-            <span style="color:#1e4030;">ANALYSIS STACK ....: </span>
-            <span style="color:#3a6050;">Isolation Forest + VADER NLP + Regex + Random Forest</span>
+    <div class="dash-header">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+                <h1>🔍 Supervision · AI Keylogger</h1>
+                <p>Dernière mise à jour : {ts.strftime('%Y-%m-%d  %H:%M:%S')}  ·  
+                   {kpis['total_phrases']} phrases analysées  ·  
+                   {kpis['metadata_count']} frappes capturées</p>
+            </div>
+            <div style="text-align:right;">
+                <div style="font-family:'JetBrains Mono',monospace; font-size:0.75em;
+                            color:#8b949e; margin-bottom:6px;">STATUT SYSTÈME</div>
+                <div style="font-family:'Syne',sans-serif; font-weight:800; font-size:1.2em;
+                            color:{alert_color}; letter-spacing:0.1em;">{alert_level}</div>
+            </div>
         </div>
-    </div>""", unsafe_allow_html=True)
+    </div>
+    """, unsafe_allow_html=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# MAIN
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# KPI CARDS
+# ---------------------------------------------------------------------------
+
+def render_kpis(kpis: dict) -> None:
+    score  = kpis["avg_score"]
+    score_color = "#3fb950" if score > 0.05 else ("#f85149" if score < -0.05 else "#d29922")
+    score_label = "positif" if score > 0.05 else ("négatif" if score < -0.05 else "neutre")
+
+    st.markdown(f"""
+    <div class="kpi-grid">
+        <div class="kpi-card blue">
+            <div class="kpi-icon">⌨️</div>
+            <div class="kpi-value">{kpis['metadata_count']:,}</div>
+            <div class="kpi-label">Frappes capturées</div>
+            <div class="kpi-delta" style="color:#388bfd">{kpis['total_phrases']} phrases</div>
+        </div>
+        <div class="kpi-card green">
+            <div class="kpi-icon">🧠</div>
+            <div class="kpi-value" style="color:{score_color};">{score:+.3f}</div>
+            <div class="kpi-label">Score sentiment moyen</div>
+            <div class="kpi-delta" style="color:{score_color}">{score_label}  ·  {kpis['positive_pct']}% positif</div>
+        </div>
+        <div class="kpi-card {'red' if kpis['recent_alerts'] > 0 else 'green'}">
+            <div class="kpi-icon">⚠️</div>
+            <div class="kpi-value" style="color:{'#f85149' if kpis['recent_alerts'] > 0 else '#3fb950'}">
+                {kpis['recent_alerts']}
+            </div>
+            <div class="kpi-label">Alertes (dernière heure)</div>
+            <div class="kpi-delta" style="color:#484f58">Total cumulé : {kpis['total_alerts']}</div>
+        </div>
+        <div class="kpi-card {'yellow' if kpis['sensitive_count'] > 0 else 'green'}">
+            <div class="kpi-icon">🔒</div>
+            <div class="kpi-value" style="color:{'#d29922' if kpis['sensitive_count'] > 0 else '#3fb950'}">
+                {kpis['sensitive_count']}
+            </div>
+            <div class="kpi-label">Données sensibles détectées</div>
+            <div class="kpi-delta" style="color:#484f58">emails · CB · téléphones</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
+# LOG VIEWER
+# ---------------------------------------------------------------------------
+
+def render_log_viewer(log_lines: list, n: int = 40) -> None:
+    st.markdown('<div class="section-title">📋 Log en temps réel</div>', unsafe_allow_html=True)
+
+    lines_html = ""
+    for line in log_lines[-n:]:
+        line = line.rstrip()
+        if not line:
+            continue
+        # Lignes d'horodatage
+        if line.startswith("[20"):
+            lines_html += f'<div class="log-line"><span class="ts">{line}</span></div>'
+        elif line.startswith("—"):
+            lines_html += f'<div class="log-line" style="color:#21262d">{line}</div>'
+        else:
+            # Masquer les potentielles données sensibles dans l'affichage
+            safe_line = line[:120] + ("…" if len(line) > 120 else "")
+            lines_html += f'<div class="log-line"><span class="txt">{safe_line}</span></div>'
+
+    if not lines_html:
+        lines_html = '<div class="log-line" style="color:#484f58; font-style:italic">En attente de données… (lancez keylogger.py)</div>'
+
+    st.markdown(f'<div class="log-container">{lines_html}</div>', unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
+# ALERTES RÉCENTES
+# ---------------------------------------------------------------------------
+
+def render_recent_alerts(alerts: list) -> None:
+    st.markdown('<div class="section-title">🚨 Alertes récentes</div>', unsafe_allow_html=True)
+
+    recent = [a for a in alerts if _is_recent(a.get("timestamp", ""), 120)][-10:]
+
+    if not recent:
+        st.markdown("""
+        <div style='background:#0d1117; border:1px solid #21262d; border-radius:8px;
+                    padding:16px; text-align:center; font-family:JetBrains Mono,monospace;
+                    font-size:0.82em; color:#3fb950;'>
+            ✅ Aucune anomalie comportementale détectée récemment
+        </div>
+        """, unsafe_allow_html=True)
+        return
+
+    for alert in reversed(recent):
+        ts    = alert.get("timestamp", "N/A")[:19]
+        score = alert.get("score", 0)
+        severity = "CRITIQUE" if score < -0.6 else "ALERTE"
+        badge_cls = "badge-critical" if severity == "CRITIQUE" else "badge-warning"
+
+        st.markdown(f"""
+        <div class="detection-row">
+            <div>
+                <span class="alert-badge {badge_cls}">{severity}</span>
+                <span style='font-family:JetBrains Mono,monospace; font-size:0.8em;
+                             color:#e6edf3; margin-left:10px;'>score={score:.4f}</span>
+            </div>
+            <div class="dtime">{ts}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
+# DÉTECTIONS SENSIBLES
+# ---------------------------------------------------------------------------
+
+def render_detections(detections: list) -> None:
+    st.markdown('<div class="section-title">🔒 Données sensibles</div>', unsafe_allow_html=True)
+
+    recent_dets = [d for d in detections if d.get("has_sensitive")][-8:]
+
+    if not recent_dets:
+        st.markdown("""
+        <div style='background:#0d1117; border:1px solid #21262d; border-radius:8px;
+                    padding:16px; text-align:center; font-family:JetBrains Mono,monospace;
+                    font-size:0.82em; color:#3fb950;'>
+            ✅ Aucune donnée sensible détectée
+        </div>
+        """, unsafe_allow_html=True)
+        return
+
+    for r in reversed(recent_dets):
+        ts = r.get("timestamp", "N/A")[:19]
+        for det in r.get("detections", []):
+            dtype  = det["type"].replace("_", " ").upper()
+            method = det.get("method", "regex")
+            badge_cls = "badge-warning" if method == "regex" else "badge-info"
+
+            st.markdown(f"""
+            <div class="detection-row">
+                <div>
+                    <span class="alert-badge {badge_cls}">{dtype}</span>
+                    <span style='font-family:JetBrains Mono,monospace; font-size:0.75em;
+                                 color:#484f58; margin-left:8px;'>[{method}] len={det.get("length",0)}</span>
+                </div>
+                <div class="dtime">{ts}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
+# SENTIMENTS TABLE
+# ---------------------------------------------------------------------------
+
+def render_sentiment_table(sentiments: list) -> None:
+    st.markdown('<div class="section-title">🧠 Dernières analyses sentiments</div>',
+                unsafe_allow_html=True)
+
+    recent = sentiments[-12:]
+    if not recent:
+        st.markdown('<div style="color:#484f58; font-family:JetBrains Mono,monospace; font-size:0.82em;">Aucune donnée.</div>',
+                    unsafe_allow_html=True)
+        return
+
+    rows_html = ""
+    for s in reversed(recent):
+        label = s.get("sentiment", "neutre")
+        score = s.get("score", 0)
+        text  = s.get("text", "")[:55] + ("…" if len(s.get("text","")) > 55 else "")
+        ts    = s.get("timestamp", "")[:16]
+
+        color_map = {"positif": "#3fb950", "négatif": "#f85149",
+                     "neutre": "#8b949e", "trop_court": "#484f58"}
+        color = color_map.get(label, "#8b949e")
+        bar   = abs(score) * 100
+        bar_c = "#3fb950" if score > 0 else "#f85149"
+
+        rows_html += f"""
+        <div style='background:#0d1117; border:1px solid #21262d; border-radius:8px;
+                    padding:10px 14px; margin-bottom:6px;'>
+            <div style='display:flex; justify-content:space-between; margin-bottom:5px;'>
+                <span style='font-family:JetBrains Mono,monospace; font-size:0.8em; color:#e6edf3;'>{text}</span>
+                <span style='font-family:JetBrains Mono,monospace; font-size:0.75em; color:{color};
+                             font-weight:600;'>{score:+.3f}</span>
+            </div>
+            <div style='display:flex; justify-content:space-between; align-items:center;'>
+                <div style='flex:1; background:#21262d; border-radius:3px; height:4px; margin-right:12px;'>
+                    <div style='width:{bar:.0f}%; background:{bar_c}; height:4px; border-radius:3px;'></div>
+                </div>
+                <span style='font-size:0.7em; color:{color};'>{label}</span>
+                <span style='font-size:0.68em; color:#484f58; margin-left:10px;'>{ts}</span>
+            </div>
+        </div>
+        """
+
+    st.markdown(rows_html, unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
+# VUE GLOBALE
+# ---------------------------------------------------------------------------
+
+def render_global_view(data: dict, cfg: dict) -> None:
+    # Status bar
+    st.markdown(f"""
+    <div class="status-bar">
+        <span class="status-live">EN DIRECT</span>
+        <span style='color:#484f58'>rafraîchissement toutes les {cfg['refresh']}s</span>
+        <span style='color:#8b949e'>{data['ts'].strftime('%H:%M:%S')}</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Row 1 : Sentiment timeline + Heatmap
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        st.markdown('<div class="section-title">📈 Évolution des sentiments</div>',
+                    unsafe_allow_html=True)
+        st.plotly_chart(chart_sentiment_timeline(data["sentiments"]),
+                        use_container_width=True, config=plotly_cfg())
+    with col2:
+        st.markdown('<div class="section-title">🕐 Activité horaire</div>',
+                    unsafe_allow_html=True)
+        st.plotly_chart(chart_activity_heatmap(data["metadata"]),
+                        use_container_width=True, config=plotly_cfg())
+
+    # Row 2 : Alertes + Détections
+    col3, col4 = st.columns([1, 1])
+    with col3:
+        render_recent_alerts(data["alerts"])
+    with col4:
+        render_detections(data["detections"])
+
+    # Row 3 : Histogramme délais + Donut sensibles
+    col5, col6 = st.columns([1, 1])
+    with col5:
+        st.markdown('<div class="section-title">⌨️ Délais inter-touches</div>',
+                    unsafe_allow_html=True)
+        st.plotly_chart(chart_delay_histogram(data["metadata"]),
+                        use_container_width=True, config=plotly_cfg())
+    with col6:
+        st.markdown('<div class="section-title">🔒 Répartition données sensibles</div>',
+                    unsafe_allow_html=True)
+        st.plotly_chart(chart_sensitive_donut(data["detections"]),
+                        use_container_width=True, config=plotly_cfg())
+
+    # Row 4 : Log + Sentiments table
+    col7, col8 = st.columns([3, 2])
+    with col7:
+        render_log_viewer(data["log_lines"], cfg["n_log"])
+    with col8:
+        render_sentiment_table(data["sentiments"])
+
+
+# ---------------------------------------------------------------------------
+# VUE DÉDIÉE — Sentiments
+# ---------------------------------------------------------------------------
+
+def render_sentiments_view(data: dict) -> None:
+    st.markdown('<div class="section-title">📈 Analyse de sentiments — Vue détaillée</div>',
+                unsafe_allow_html=True)
+
+    sents = data["sentiments"]
+    if not sents:
+        st.info("Aucune donnée de sentiment disponible. Lancez le keylogger et tapez du texte.")
+        return
+
+    st.plotly_chart(chart_sentiment_timeline(sents), use_container_width=True, config=plotly_cfg())
+
+    # Répartition en barres
+    import collections
+    label_counts = collections.Counter(s.get("sentiment","neutre") for s in sents)
+    total = len(sents)
+
+    c1, c2, c3 = st.columns(3)
+    for col, lbl, clr in zip([c1, c2, c3],
+                              ["positif", "négatif", "neutre"],
+                              ["#3fb950", "#f85149", "#8b949e"]):
+        pct = int(label_counts.get(lbl, 0) * 100 / total)
+        col.markdown(f"""
+        <div style='background:#0d1117; border:1px solid #21262d; border-radius:10px;
+                    padding:20px; text-align:center;'>
+            <div style='font-size:2em; font-weight:800; color:{clr}; font-family:JetBrains Mono,monospace;'>
+                {pct}%</div>
+            <div style='font-size:0.8em; color:#8b949e; margin-top:4px;'>{lbl.upper()}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("---")
+    render_sentiment_table(sents)
+
+
+# ---------------------------------------------------------------------------
+# VUE DÉDIÉE — Anomalies
+# ---------------------------------------------------------------------------
+
+def render_anomalies_view(data: dict) -> None:
+    st.markdown('<div class="section-title">⚠️ Détection d\'anomalies — Vue détaillée</div>',
+                unsafe_allow_html=True)
+
+    st.plotly_chart(chart_anomaly_scatter(data["alerts"]),
+                    use_container_width=True, config=plotly_cfg())
+
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        st.plotly_chart(chart_delay_histogram(data["metadata"]),
+                        use_container_width=True, config=plotly_cfg())
+    with col2:
+        render_recent_alerts(data["alerts"])
+
+
+# ---------------------------------------------------------------------------
+# VUE DÉDIÉE — Données sensibles
+# ---------------------------------------------------------------------------
+
+def render_sensitive_view(data: dict) -> None:
+    st.markdown('<div class="section-title">🔒 Données sensibles — Vue détaillée</div>',
+                unsafe_allow_html=True)
+
+    st.plotly_chart(chart_sensitive_donut(data["detections"]),
+                    use_container_width=True, config=plotly_cfg())
+    render_detections(data["detections"])
+
+
+# ---------------------------------------------------------------------------
+# VUE DÉDIÉE — Logs bruts
+# ---------------------------------------------------------------------------
+
+def render_logs_view(data: dict, n: int) -> None:
+    st.markdown('<div class="section-title">📋 Logs bruts — Vue détaillée</div>',
+                unsafe_allow_html=True)
+    render_log_viewer(data["log_lines"], n)
+
+
+# ---------------------------------------------------------------------------
+# MAIN — Point d'entrée Streamlit
+# ---------------------------------------------------------------------------
 
 def main() -> None:
-    # 1. Sidebar en premier (stabilise les widgets Streamlit)
-    cfg = render_sidebar()
+    # Charger les données (avec cache court)
+    @st.cache_data(ttl=3)
+    def _load():
+        return load_all()
 
-    # 2. Données + KPIs
-    d = load_data()
-    k = _kpis(d)
+    data = _load()
+    kpis = compute_kpis(data)
 
-    # 3. Header + KPI cards
-    ui_header(k, d["ts"])
-    ui_kpis(k)
+    # Sidebar
+    cfg = render_sidebar(kpis)
 
-    # 4. Router vue
-    v = cfg["view"]
-    if   "Global"      in v: view_global(d, cfg, k)
-    elif "Sentiment"   in v: view_sentiments(d)
-    elif "Anomaly"     in v: view_anomalies(d, k)
-    elif "Sensitive"   in v: view_sensitive(d)
-    elif "Log"         in v: view_log(d, cfg["n_log"])
-    elif "Threat"      in v: view_threat(d, k)
+    # Header
+    render_header(kpis, data["ts"])
 
-    # 5. Countdown auto-refresh (non-bloquant — 1s par tick)
-    ph = st.empty()
-    for i in range(cfg["refresh"], 0, -1):
-        ph.markdown(
-            f'<div style="position:fixed;bottom:10px;right:14px;z-index:9999;'
-            f'font-family:Share Tech Mono,monospace;font-size:.65em;color:#0e2820;'
-            f'background:#060a0f;padding:4px 10px;border:1px solid #0c2030;border-radius:4px;">'
-            f'⟳ {i}s</div>',
-            unsafe_allow_html=True,
-        )
-        time.sleep(1)
-    st.cache_data.clear()
+    # KPIs
+    render_kpis(kpis)
+
+    # Contenu selon la vue sélectionnée
+    view = cfg["view"]
+    if view == "Vue globale":
+        render_global_view(data, cfg)
+    elif view == "Sentiments":
+        render_sentiments_view(data)
+    elif view == "Anomalies":
+        render_anomalies_view(data)
+    elif view == "Données sensibles":
+        render_sensitive_view(data)
+    elif view == "Logs bruts":
+        render_logs_view(data, cfg["n_log"])
+
+    # Auto-refresh via st.rerun après N secondes
+    time.sleep(cfg["refresh"])
     st.rerun()
 
 
